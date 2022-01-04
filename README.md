@@ -9,7 +9,7 @@ Glucose Content using Arduino Nano and AS7262 6 Channel Visible Light Sensor
 - DHT11
 - Rotary Encoder Switch for Menu
 
-for more wiring information please contact: massagita3393@gmail.com
-
 # Author 
 Mas Sagita 2020
+
+for more wiring information please contact: massagita3393@gmail.com
