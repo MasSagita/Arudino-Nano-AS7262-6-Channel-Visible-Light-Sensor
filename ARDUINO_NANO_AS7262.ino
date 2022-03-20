@@ -1,17 +1,15 @@
 /*
- * Program urine detector AS7262
- * 
- * author: Mas Sagita 2020
- */
+   Program urine detector AS7262
+
+   author: Mas Sagita 2020
+*/
 
 
 #include <OneWire.h>
-#include <AverageValue.h>
 
-#include <dht11.h>
 #include <Wire.h>
-#define DHT11_PIN     A1
-dht11 DHT;
+
+#define turbidityPin  A1
 
 #define ONE_WIRE_BUS  A0  //Pin data DS18B20 1
 OneWire ds(ONE_WIRE_BUS);
@@ -19,10 +17,10 @@ OneWire ds(ONE_WIRE_BUS);
 #include <LiquidCrystal_I2C.h>
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-#include "Adafruit_AS726x.h"
-Adafruit_AS726x ams;
+int turbValue;
+int ntu;
 
-uint16_t sensorValues[AS726x_NUM_CHANNELS];
+bool colorRead;
 
 //Rotary Encoder PIN
 #define pinRotaryEncoderCLK     2
@@ -50,10 +48,13 @@ long pressDuration;
 int ledState = HIGH;         // the current state of the output pin
 int buttonState;             // the current reading from the input pin
 int lastButtonState = LOW;   // the previous reading from the input pin
+
 // the following variables are unsigned longs because the time, measured in
 // milliseconds, will quickly become a bigger number than can be stored in an int.
-unsigned long lastDebounceTime = 0;  // the last time the output pin was toggled
-unsigned long debounceDelay = 50;    // the debounce time; increase if the output flickers
+// the last time the output pin was toggled
+unsigned long lastDebounceTime = 0;
+// the debounce time; increase if the output flickers
+unsigned long debounceDelay = 50;
 
 //Variables for set interrupt encoder
 uint8_t maskSensorA;
@@ -70,11 +71,12 @@ String currentDir = "";
 float dsVal; //Store ds18b20 value
 float dht11Val; //Store DHT11 value
 
-const int BUZZER_PIN = 10; //Buzzer pin
-const int ledPin = 13; //Led pin
+const int BUZZER_PIN  = 10; //Buzzer pin
+const int ledPin      = 13; //Led pin
 
-const int relayPin[] = {6, 7};
+const int relayPin[]  = {11, 12};
 const int buttonStart = 8;
+const int buttonYellow = 7;
 
 int buttonStartState;
 
@@ -85,31 +87,29 @@ int countDisplay = 0;
 int menu = 0;
 int cursorSet = 0;
 int cursorState;
+
 //Variables for menu
-static bool isMenu = false;
-static bool isPhSetup = false;
-static bool isScreenSetup = false;
-static bool isPressSetup = false;
-static bool isManualScreen = false;
-static bool isJsonSend = false;
-static bool isLimitHeater = false;
-static bool isModeFan = false;
+static bool isMenu          = false;
+static bool isPhSetup       = false;
+static bool isScreenSetup   = false;
+static bool isPressSetup    = false;
+static bool isManualScreen  = false;
+static bool isJsonSend      = false;
+static bool isLimitHeater   = false;
+static bool isModeFan       = false;
+
 //Variables for menu
-String screenSetup = "";
-String jsonStatus = "";
-String modeFan = "";
+String screenSetup      = "";
+String jsonStatus       = "";
+String modeFan          = "";
+String lastScreenSetup  = "";
 
 int refresh = 0; //For refresh screen
 
-float limitHeater = 40;
+float limitHeater = 60;
+float lastLimitHeater;
 
-uint8_t tempAS;
-bool rdy;
 int tempSensorWarna;
-
-float calibratedValues[AS726x_NUM_CHANNELS];
-
-bool colorRead;
 
 float dallas(OneWire& ds, byte start = false) {
   int16_t temp;
@@ -130,17 +130,22 @@ void setup() {
   // Initialize "debug" serial port
   // The data rate must be much higher than the "link" serial port
   Serial.begin(115200);
+
+  Serial.println("CLEARSHEET");
+  Serial.println("LABEL,Violet,Blue,Green,Yellow,Orange,Red");
+
   lcd.init();
 
   Serial.println("-------BGV1-------");
   dallas(ds, true);
 
-  pinMode(BUZZER_PIN, OUTPUT);
-  pinMode(ledPin, OUTPUT);
-  pinMode(buttonStart, INPUT_PULLUP);
+  pinMode(BUZZER_PIN,   OUTPUT);
+  pinMode(ledPin,       OUTPUT);
+  pinMode(buttonStart,  INPUT_PULLUP);
+  pinMode(buttonYellow, INPUT_PULLUP);
 
-  pinMode(pinRotaryEncoderCLK, INPUT_PULLUP);
-  pinMode(pinRotaryEncoderDT, INPUT_PULLUP);
+  pinMode(pinRotaryEncoderCLK,    INPUT_PULLUP);
+  pinMode(pinRotaryEncoderDT,     INPUT_PULLUP);
   pinMode(pinRotaryEncoderSwitch, INPUT_PULLUP);
 
   for (int i = 0; i < 3; i++) {
@@ -153,27 +158,19 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(pinRotaryEncoderCLK), encoderARising, RISING);
   attachInterrupt(digitalPinToInterrupt(pinRotaryEncoderDT), encoderBRising, RISING);
 
-  maskSensorA  = digitalPinToBitMask(pinRotaryEncoderCLK);
-  pinSensorA = portInputRegister(digitalPinToPort(pinRotaryEncoderCLK));
-  maskSensorB  = digitalPinToBitMask(pinRotaryEncoderDT);
-  pinSensorB = portInputRegister(digitalPinToPort(pinRotaryEncoderDT));
+  maskSensorA   = digitalPinToBitMask(pinRotaryEncoderCLK);
+  pinSensorA    = portInputRegister(digitalPinToPort(pinRotaryEncoderCLK));
+  maskSensorB   = digitalPinToBitMask(pinRotaryEncoderDT);
+  pinSensorB    = portInputRegister(digitalPinToPort(pinRotaryEncoderDT));
 
-  for (int i = 0; i < 2; i++) {
-    tone(BUZZER_PIN, 2394, 125); //2394
-    digitalWrite(ledPin, 1);
-    delay(130);
-    tone(BUZZER_PIN, 3136, 125); //3136
-    digitalWrite(ledPin , 0);
-    delay(125);
-  }
+  buzzer(0, 3, 2394, 3136, 120);
 
   manualScreen = 0;
   screenSetup = "Manual"; // start screen manual scroll
-  jsonStatus = "ON";
   modeFan = "auto"; // start fan mode manual
 
   longPressBtn = true;
-  
+
   lcd.backlight();
   lcd.clear();
   lcd.setCursor(0, 0);
@@ -181,47 +178,31 @@ void setup() {
   lcd.setCursor(0, 1);
   lcd.print(F("Trial Version"));
   delay(1000);
-
-  if (!ams.begin()) {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print(F("AS7262 OFF"));
-    lcd.setCursor(0, 1);
-    lcd.print(F("CHECK WIRING"));
-    while (1);
-  }
-  ams.setConversionType(MODE_2);
 }
 
 void loop() {
 
   digitalWrite(BUZZER_PIN, HIGH);
 
-  isMenu = false;
-  isPhSetup = false;
-  isScreenSetup = false;
-  isPressSetup = false;
-  isJsonSend = false;
-  isHeating = false;
-  isModeFan = false;
+  isMenu          = false;
+  isPhSetup       = false;
+  isScreenSetup   = false;
+  isPressSetup    = false;
+  isJsonSend      = false;
+  isHeating       = false;
+  isModeFan       = false;
 
   getRotaryBtn();
-  readColorSensor();
 
   hitungSuhuDS();
-  hitungDHT11();
-
-  buttonStartState = digitalRead(buttonStart);
 
   if (screenSetup == "Auto") {
+    lastScreenSetup = screenSetup;
     isManualScreen = false;
     if (isManualScreen == false) {
       countDisplay++;
       manualScreen = 10;
-      if (++refresh > 1) {
-        lcd.clear();
-        refresh = 0;
-      }
+      refreshScreen(5);
       lcd.setCursor(15, 0);
       lcd.print(F("A"));
       lcd.setCursor(15, 1);
@@ -231,11 +212,9 @@ void loop() {
   }
 
   if (screenSetup == "Manual") {
+    lastScreenSetup = screenSetup;
     isManualScreen = true;
-    if (++refresh > 1) {
-      lcd.clear();
-      refresh = 0;
-    }
+    refreshScreen(5);
     lcd.setCursor(15, 0);
     lcd.print(F("M"));
 
@@ -252,62 +231,95 @@ void loop() {
     countDisplay = 0;
   }
 
-  Serial.println((String) countSend + "\t" + screenSetup + "\t"
-                 + countDisplay + "\t" + manualScreen);
+  digitalWrite(ledPin, !digitalRead(ledPin));
+
+  //  Serial.println((String) countSend + "\t" + screenSetup + "\t"
+  //                 + countDisplay + "\t" + manualScreen);
 }
 
-void readColorSensor() {
-  if (colorRead) {
-    tempAS = ams.readTemperature();
-    ams.startMeasurement();
-
-    rdy = false;
-    while (!rdy) {
-      rdy = ams.dataReady();
-    }
-    ams.readCalibratedValues(calibratedValues);
-    //ams.readRawValues(sensorValues);
-  }
-  if (!colorRead){
-    
+void refreshScreen(int intervalRefresh) {
+  if (++refresh > intervalRefresh) {
+    lcd.clear();
+    refresh = 0;
   }
 }
+
 int rel0 = 1, rel1 = 1;
 int statusRelay;
 
+int tampilanScanning;
+int counterScanning;
+int counterScanningTurb;
+int yellowState;
+
 void hitungSuhuDS() {
+  buttonStartState = digitalRead(buttonStart);
+  yellowState = digitalRead(buttonYellow);
+
   dsVal = dallas(ds);
-  if (buttonStartState == 1) {
-    isHeating = true;
-  }
+
+  if (buttonStartState) isHeating = true;
 
   if (isHeating) {
     screenSetup = "heating";
     rel0 = 0;
   }
 
-  if (dsVal > limitHeater) {
-    screenSetup = "scanning";
-    rel0 = 1;
-  }
-
-  if (screenSetup == "scanning") {
-    lcd.clear();
-    lcd.print(F("SCANNING"));
-    colorRead = true;
-  }
-
   if (screenSetup == "heating") {
     colorRead = false;
-    lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print(F("HEATING:"));
     lcd.print(dsVal); lcd.print((char)223); lcd.print("C");
 
     lcd.setCursor(0, 1);
-    lcd.print("set:"); lcd.print((int)limitHeater);
+    lcd.print("set:");  lcd.print((int)limitHeater);
     lcd.print(" fan:"); lcd.print(modeFan);
   }
+
+  if (dsVal > limitHeater) {
+    rel0 = 1;
+  }
+
+  if (yellowState) {
+    screenSetup = "scan";
+    lcd.clear();
+  }
+  
+  if (screenSetup == "scan") {
+    counterScanning++;
+    lcd.setCursor(0, 0);
+    lcd.print(F("SCANNING AS7262:"));  lcd.print(counterScanning);
+    if (counterScanning > 500) {
+      screenSetup = "doneScan";
+      refreshScreen(2);
+      lcd.setCursor(0, 0);  lcd.print(F("Scan AS7262 Done!"));  
+      lcd.setCursor(0, 1);  lcd.print(F("Total Data:")); lcd.print(counterScanning);
+      if(yellowState && buttonStartState){
+        screenSetup = "scanTurb";
+        lcd.clear();
+      }
+    }
+  }
+
+  if (screenSetup == "scanTurb"){
+    counterScanningTurb++;
+    lcd.setCursor(0, 0);
+    lcd.print(F("SCANNING AS7262:"));  lcd.print(counterScanningTurb);
+    if(counterScanningTurb > 500){
+      screenSetup = "doneScanTurb";
+      refreshScreen(2);
+      lcd.setCursor(0, 0);  lcd.print(F("Scan Turbidity Done!"));  
+      lcd.setCursor(0, 1);  lcd.print(F("Total Data:")); lcd.print(counterScanningTurb);
+    }
+  }
+
+  if(screenSetup == "doneScanTurb"){
+    delay(2000);
+    lcd.clear();
+    screenSetup == lastScreenSetup;
+  }
+
+  
 
   if (modeFan == "manual") rel1 = 0;
   if (modeFan == "auto") {
@@ -315,115 +327,76 @@ void hitungSuhuDS() {
     else rel1 = 1;
   }
 
-  //  lcd.setCursor(13, 1);
-  //  lcd.print(isHeating);
-
-  relay(0, rel0);
-  relay(1, rel1);
+  relay(0, rel0);   //pemanas
+  relay(1, rel1);   //fan
 }
 
-void hitungDHT11() {
-  dht11Val = DHT.read(DHT11_PIN);
-}
 
 void displayScreen() {
   //display the screen according to condition manual or auto
   //for setting find in menu
   if (countDisplay >= 0 && countDisplay <= 9 || manualScreen == 0) {
-    ams.drvOff();
+    colorRead = false;
     lcd.setCursor(0, 0); lcd.print(F("DS18B20:"));
     lcd.setCursor(0, 1); lcd.print(F("T:")); lcd.print(dsVal);
     lcd.print((char)223); lcd.print("C");
   }
 
   if (countDisplay >= 10 && countDisplay <= 20 || manualScreen == 1) {
-    ams.drvOff();
-    lcd.setCursor(0, 0); lcd.print(F("BiPo_DHT11:"));
-    lcd.setCursor(0, 1);
-    lcd.print(F("T:")); lcd.print(DHT.temperature, 1);
-    lcd.print(F(" H:"));  lcd.print(DHT.humidity, 1);  lcd.print(F("%"));
+    colorRead = false;
+    lcd.setCursor(0, 0); lcd.print(F("TURBIDITY:"));
   }
 
   if (countDisplay >= 21 && countDisplay <= 30 || manualScreen == 2) {
-    lcd.setCursor(0, 1);
-    lcd.print(F("V:")); lcd.print(sensorValues[AS726x_VIOLET]);
-    lcd.setCursor(6, 1);
-    lcd.print(F("B:")); lcd.print(sensorValues[AS726x_BLUE]);
-    tempSensorWarna = 1;
+
   }
 
   if (countDisplay >= 31 && countDisplay <= 40 || manualScreen == 3) {
-    lcd.setCursor(0, 1);
-    lcd.print(F("H:")); lcd.print(sensorValues[AS726x_GREEN]);
-    lcd.setCursor(6, 1);
-    lcd.print(F("K:")); lcd.print(sensorValues[AS726x_YELLOW]);
-    tempSensorWarna = 1;
+
   }
 
-  if (countDisplay >= 41 && countDisplay <= 50 || manualScreen == 4) {    
-    lcd.setCursor(0, 1);
-    lcd.print(F("O:")); lcd.print(sensorValues[AS726x_ORANGE]);
-    lcd.setCursor(6, 1);
-    lcd.print(F("M:")); lcd.print(sensorValues[AS726x_RED]);
-    tempSensorWarna = 1;
-  }
+  if (countDisplay >= 41 && countDisplay <= 50 || manualScreen == 4) {
 
-  if (tempSensorWarna == 1) {
-    colorRead = true;
-    ams.drvOn();
-    lcd.setCursor(0, 0);
-    lcd.print("AS7262 "); lcd.print("T:");
-    lcd.print(tempAS);
-    lcd.print((char)223); lcd.print("C");
   }
 
   if (countDisplay > 50) countDisplay = 0; tempSensorWarna = 0;
 }
 
 void displayMenu() {
-  isMenu = true;
-  isPhSetup = false;
-  isScreenSetup = false;
-  isPressSetup = false;
-  isJsonSend = false;
-  isManualScreen = false;
-  isModeFan = false;
+  isMenu          = true;
+  isPhSetup       = false;
+  isScreenSetup   = false;
+  isPressSetup    = false;
+  isJsonSend      = false;
+  isManualScreen  = false;
+  isModeFan       = false;
   menu = 0;
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print(F("Setup Screen"));
 
-  tone(BUZZER_PIN, 3136, 125); //3136
-  digitalWrite(ledPin, 1);
-  delay(200);
-  tone(BUZZER_PIN, 2394, 125); //2394
-  digitalWrite(ledPin , 0);
-  delay(300);
+  buzzer(0, 1, 3036, 2794, 100);
 
   delay(500);
 
   while (1) {
-    readColorSensor();
     getRotaryBtn();
-    if (ledState == 0) {
+    if (ledState == 1) {
       isMenu = false;
       cursorSet = 9;
     }
-    if (ledState == 1) {
-      isMenu = true;
-      isPhSetup = false;
-      isScreenSetup = false;
-      isPressSetup = false;
-      isJsonSend = false;
-      isLimitHeater = false;
-      isModeFan = false;
+    if (ledState == 0) {
+      isMenu          = true;
+      isPhSetup       = false;
+      isScreenSetup   = false;
+      isPressSetup    = false;
+      isJsonSend      = false;
+      isLimitHeater   = false;
+      isModeFan       = false;
       cursorSet = 0;
     }
 
-    if (++refresh > 5) {
-      lcd.clear();
-      refresh = 0;
-    }
+    refreshScreen(5);
     //Serial.println(menu);
 
     //limit menu
@@ -432,12 +405,12 @@ void displayMenu() {
 
     if (menu == 0) {
       tempSensorWarna = 0;
-      isScreenSetup = true;
-      isPhSetup = false;
-      isPressSetup = false;
-      isJsonSend = false;
-      isLimitHeater = false;
-      isModeFan = false;
+      isScreenSetup   = true;
+      isPhSetup       = false;
+      isPressSetup    = false;
+      isJsonSend      = false;
+      isLimitHeater   = false;
+      isModeFan       = false;
 
       lcd.setCursor(0, 0);
       lcd.print(menu); lcd.print(F(".Screen Setup"));
@@ -452,12 +425,12 @@ void displayMenu() {
 
     if (menu == 1) {
       tempSensorWarna = 0;
-      isScreenSetup = false;
-      isPhSetup = true;
-      isPressSetup = false;
-      isJsonSend = false;
-      isLimitHeater = true;
-      isModeFan = false;
+      isScreenSetup   = false;
+      isPhSetup       = true;
+      isPressSetup    = false;
+      isJsonSend      = false;
+      isLimitHeater   = true;
+      isModeFan       = false;
 
       lcd.setCursor(0, 0);
       lcd.print(menu); lcd.print(F(".Limit Heater"));
@@ -472,12 +445,12 @@ void displayMenu() {
 
     if (menu == 2) {
       tempSensorWarna = 0;
-      isScreenSetup = false;
-      isPhSetup = false;
-      isPressSetup = false;
-      isJsonSend = false;
-      isLimitHeater = false;
-      isModeFan = true;
+      isScreenSetup   = false;
+      isPhSetup       = false;
+      isPressSetup    = false;
+      isJsonSend      = false;
+      isLimitHeater   = false;
+      isModeFan       = true;
 
       lcd.setCursor(0, 0);
       lcd.print(menu); lcd.print(F(".Fan Mode"));
@@ -491,35 +464,19 @@ void displayMenu() {
     }
 
     if (menu == 3) {
-      tempSensorWarna = 1;
-      lcd.setCursor(0, 1);
-      lcd.print(F("V:")); lcd.print(sensorValues[AS726x_VIOLET]);
-      lcd.setCursor(6, 1);
-      lcd.print(F("B:")); lcd.print(sensorValues[AS726x_BLUE]);
+
     }
 
     if (menu == 4) {
-      tempSensorWarna = 1;
-      lcd.setCursor(0, 1);
-      lcd.print(F("H:")); lcd.print(sensorValues[AS726x_GREEN]);
-      lcd.setCursor(6, 1);
-      lcd.print(F("K:")); lcd.print(sensorValues[AS726x_YELLOW]);
+
     }
 
     if (menu == 5) {
-      tempSensorWarna = 1;
-      lcd.setCursor(0, 1);
-      lcd.print(F("O:")); lcd.print(sensorValues[AS726x_ORANGE]);
-      lcd.setCursor(6, 1);
-      lcd.print(F("M:")); lcd.print(sensorValues[AS726x_RED]);
+
     }
 
     if (tempSensorWarna == 1) {
-      ams.drvOn();
-      colorRead = true;
-      lcd.setCursor(0, 0);
-      lcd.print(menu); lcd.print(".S-AS7262 ");
-      lcd.print("T:"); lcd.print(tempAS);
+
     }
 
     if (menu == 6) {
@@ -529,22 +486,12 @@ void displayMenu() {
       lcd.print("AS7262 V0.1");
     }
 
-    if(tempSensorWarna == 0){
-      ams.drvOff();
-      colorRead = false;
-    }
-
     //need eeprom to save setting value
     if (longPressBtn) {
       lcd.clear();
       lcd.setCursor(0, 0);
       lcd.print("Saving..");
-      tone(BUZZER_PIN, 2394, 125); //2394
-      digitalWrite(ledPin, 1);
-      delay(200);
-      tone(BUZZER_PIN, 3136, 125); //3136
-      digitalWrite(ledPin , 0);
-      delay(300);
+      buzzer(0, 1, 2794, 3036, 100);
       delay(500);
       break;
     }
@@ -578,7 +525,6 @@ void getRotaryBtn() {
       }
     }
   }
-
   lastButtonState = currentState;
 
   if (lastState == HIGH && currentState == LOW) {       // button is pressed
@@ -594,8 +540,8 @@ void getRotaryBtn() {
     if ( pressDuration < SHORT_PRESS_TIME ) {
       longPressBtn = false;
       shortPressBtn = true;
-      Serial.print((String)"A short press is detected \t");
-      Serial.println((String) longPressBtn + shortPressBtn);
+      //      Serial.print((String)"A short press is detected \t");
+      //      Serial.println((String) longPressBtn + shortPressBtn);
     }
   }
 
@@ -605,12 +551,12 @@ void getRotaryBtn() {
     if ( pressDuration > LONG_PRESS_TIME ) {
       longPressBtn = true;
       shortPressBtn = false;
-      Serial.print((String)"A long press is detected \t");
-      Serial.println((String) longPressBtn + shortPressBtn);
+      //      Serial.print((String)"A long press is detected \t");
+      //      Serial.println((String) longPressBtn + shortPressBtn);
       isLongDetected = true;
     }
   }
-  digitalWrite(ledPin, isLongDetected);
+  //digitalWrite(ledPin, !isLongDetected);
   // save the the last state
   lastState = currentState;
 }
@@ -638,8 +584,7 @@ void encoderARising() {
 }
 
 void encoderBRising() {
-  if ((*pinSensorA & maskSensorA) &&  (*pinSensorB & maskSensorB) && encoderBFlag)
-  {
+  if ((*pinSensorA & maskSensorA) &&  (*pinSensorB & maskSensorB) && encoderBFlag) {
     nilaiEncoder = 1;
     countEcd ++;
     currentDir = "CW";
@@ -652,10 +597,19 @@ void encoderBRising() {
     encoderAFlag = false;
     encoderBFlag = false;
   }
-  else if (*pinSensorB & maskSensorB)
-  {
+  else if (*pinSensorB & maskSensorB) {
     encoderAFlag = true;
   }
   EIFR = 0xFF;
 }
 
+void buzzer(int iMin, int iMax, int toneBuzzer1, int toneBuzzer2, int toneInterval) {
+  for (int i = iMin; i < iMax; i++) {
+    tone(BUZZER_PIN, toneBuzzer1, 125); //2394
+    digitalWrite(ledPin, 1);
+    delay(toneInterval);
+    tone(BUZZER_PIN, toneBuzzer2, 125); //3136
+    digitalWrite(ledPin , 0);
+    delay(toneInterval);
+  }
+}
